@@ -1,0 +1,26 @@
+services:
+  simulation:
+    build:
+      context: ./simulation
+    image: arb-contest/simulation:dev
+    container_name: arb-simulation
+    environment:
+      RUST_LOG: ${RUST_LOG:?RUST_LOG must be set}
+    ports:
+      - "9003:9003/tcp"
+
+  example-bot:
+    build:
+      context: ./contestants/example-bot
+    image: arb-contest/example-bot:dev
+    container_name: arb-example-bot
+    depends_on:
+      - simulation
+    environment:
+      RUST_LOG: ${RUST_LOG:?RUST_LOG must be set}
+      SIM_HTTP_ADDR: ${SIM_HTTP_ADDR:?SIM_HTTP_ADDR must be set}
+
+# Network config lives in the bridge/host overlay files (selected by the
+# Python launcher based on SIM_NETWORK_MODE) so the two are mutually
+# exclusive — compose rejects a service that has both `network_mode` and
+# `networks` set.

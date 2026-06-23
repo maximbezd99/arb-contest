@@ -43,65 +43,47 @@ pub struct TokenPair {
     pub volume: u64,
 }
 
-/// Format:
+/// Format (all integers little-endian, fixed order, no delimiters/markers):
 ///
-/// fee:<fee>;tokens:<token>[,<token>]*;pairs:<pair>[,<pair>]*;
+///   static_atomic_usd (u64) | variable_bps (u64)
+///   tokens_byte_len   (u64) | <tokens_byte_len bytes of tokens>
+///   pairs_byte_len    (u64) | <pairs_byte_len bytes of pairs>
 ///
-/// Fee (fixed 16 bytes):
-///   static_atomic_usd (u64 LE) | variable_bps (u64 LE)
+/// Each token is 16 bytes:
+///   id (u64) | decimals (u64)
 ///
-/// Token (fixed 16 bytes):
-///   id (u64 LE) | decimals (u64 LE)
+/// Each pair is 40 bytes:
+///   id (u64) | base (u64) | quote (u64) | price (u64) | volume (u64)
 ///
-/// Pair (fixed 40 bytes):
-///   id (u64 LE) | base (u64 LE) | quote (u64 LE) | price (u64 LE) | volume (u64 LE)
-///
-/// All integers are little-endian. The ASCII `,` and `;` bytes are framing only.
+/// `tokens_byte_len` is always a multiple of 16; `pairs_byte_len` of 40.
 pub fn serialize_market(market: &Market) -> Vec<u8> {
     let mut out = Vec::new();
 
-    out.extend_from_slice(b"fee:");
-    serialize_fee(&market.fee, &mut out);
-    out.push(b';');
+    out.extend_from_slice(&market.fee.static_atomic_usd.to_le_bytes());
+    out.extend_from_slice(&market.fee.variable_bps.to_le_bytes());
 
-    out.extend_from_slice(b"tokens:");
-    for (i, t) in market.tokens.iter().enumerate() {
-        if i > 0 {
-            out.push(b',');
-        }
-        serialize_token(t, &mut out);
+    let tokens_byte_len = (market.tokens.len() as u64) * TOKEN_SIZE as u64;
+    out.extend_from_slice(&tokens_byte_len.to_le_bytes());
+    for t in &market.tokens {
+        out.extend_from_slice(&t.id.to_le_bytes());
+        out.extend_from_slice(&t.decimals.to_le_bytes());
     }
-    out.push(b';');
 
-    out.extend_from_slice(b"pairs:");
-    for (i, p) in market.pairs.iter().enumerate() {
-        if i > 0 {
-            out.push(b',');
-        }
-        serialize_pair(p, &mut out);
+    let pairs_byte_len = (market.pairs.len() as u64) * PAIR_SIZE as u64;
+    out.extend_from_slice(&pairs_byte_len.to_le_bytes());
+    for p in &market.pairs {
+        out.extend_from_slice(&p.id.to_le_bytes());
+        out.extend_from_slice(&p.base.to_le_bytes());
+        out.extend_from_slice(&p.quote.to_le_bytes());
+        out.extend_from_slice(&p.price.to_le_bytes());
+        out.extend_from_slice(&p.volume.to_le_bytes());
     }
-    out.push(b';');
 
     out
 }
 
-fn serialize_fee(f: &Fee, out: &mut Vec<u8>) {
-    out.extend_from_slice(&f.static_atomic_usd.to_le_bytes());
-    out.extend_from_slice(&f.variable_bps.to_le_bytes());
-}
-
-fn serialize_token(t: &Token, out: &mut Vec<u8>) {
-    out.extend_from_slice(&t.id.to_le_bytes());
-    out.extend_from_slice(&t.decimals.to_le_bytes());
-}
-
-fn serialize_pair(p: &TokenPair, out: &mut Vec<u8>) {
-    out.extend_from_slice(&p.id.to_le_bytes());
-    out.extend_from_slice(&p.base.to_le_bytes());
-    out.extend_from_slice(&p.quote.to_le_bytes());
-    out.extend_from_slice(&p.price.to_le_bytes());
-    out.extend_from_slice(&p.volume.to_le_bytes());
-}
+pub const TOKEN_SIZE: usize = 16;
+pub const PAIR_SIZE: usize = 40;
 
 #[cfg(test)]
 mod tests {
@@ -114,6 +96,13 @@ mod tests {
         }
     }
 
+    fn serialize_fee_block() -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&10_000u64.to_le_bytes());
+        v.extend_from_slice(&5u64.to_le_bytes());
+        v
+    }
+
     #[test]
     fn empty_market() {
         let m = Market {
@@ -121,14 +110,10 @@ mod tests {
             tokens: vec![],
             pairs: vec![],
         };
-        let bytes = serialize_market(&m);
-        let mut expected = Vec::new();
-        expected.extend_from_slice(b"fee:");
-        expected.extend_from_slice(&10_000u64.to_le_bytes());
-        expected.extend_from_slice(&5u64.to_le_bytes());
-        expected.push(b';');
-        expected.extend_from_slice(b"tokens:;pairs:;");
-        assert_eq!(bytes, expected);
+        let mut expected = serialize_fee_block();
+        expected.extend_from_slice(&0u64.to_le_bytes()); // tokens_byte_len
+        expected.extend_from_slice(&0u64.to_le_bytes()); // pairs_byte_len
+        assert_eq!(serialize_market(&m), expected);
     }
 
     #[test]
@@ -145,28 +130,22 @@ mod tests {
             }],
         };
 
-        let mut expected = Vec::new();
-        expected.extend_from_slice(b"fee:");
-        expected.extend_from_slice(&10_000u64.to_le_bytes());
-        expected.extend_from_slice(&5u64.to_le_bytes());
-        expected.push(b';');
-        expected.extend_from_slice(b"tokens:");
+        let mut expected = serialize_fee_block();
+        expected.extend_from_slice(&(TOKEN_SIZE as u64).to_le_bytes());
         expected.extend_from_slice(&1u64.to_le_bytes());
         expected.extend_from_slice(&6u64.to_le_bytes());
-        expected.push(b';');
-        expected.extend_from_slice(b"pairs:");
+        expected.extend_from_slice(&(PAIR_SIZE as u64).to_le_bytes());
         expected.extend_from_slice(&2u64.to_le_bytes());
         expected.extend_from_slice(&3u64.to_le_bytes());
         expected.extend_from_slice(&1u64.to_le_bytes());
         expected.extend_from_slice(&4u64.to_le_bytes());
         expected.extend_from_slice(&5u64.to_le_bytes());
-        expected.push(b';');
 
         assert_eq!(serialize_market(&m), expected);
     }
 
     #[test]
-    fn multiple_entries_comma_separated() {
+    fn size_accounting() {
         let m = Market {
             fee: fee(),
             tokens: vec![Token { id: 0, decimals: 6 }, Token { id: 1, decimals: 6 }],
@@ -188,14 +167,7 @@ mod tests {
             ],
         };
 
-        let bytes = serialize_market(&m);
-        // "fee:" (4) + 16 fee bytes + ";" (1) = 21
-        // "tokens:" (7) + 2*16 tokens + 1 comma + ";" (1) = 41
-        // "pairs:"  (6) + 2*40 pairs  + 1 comma + ";" (1) = 88
-        assert_eq!(bytes.len(), 21 + 41 + 88);
-        assert!(bytes.starts_with(b"fee:"));
-        assert!(bytes.ends_with(b";"));
-        assert!(bytes.windows(8).any(|w| w == b";tokens:"));
-        assert!(bytes.windows(7).any(|w| w == b";pairs:"));
+        // 16 fee + 8 tokens_len + 2*16 tokens + 8 pairs_len + 2*40 pairs
+        assert_eq!(serialize_market(&m).len(), 16 + 8 + 32 + 8 + 80);
     }
 }
