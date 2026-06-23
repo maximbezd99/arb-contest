@@ -5,6 +5,7 @@ use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
 
 use super::config::GenerationConfig;
+use super::math::{cross_pair_price, pow10, volume_atomic};
 use crate::protocol::market::{Fee, Market, Token, TokenPair};
 
 /// Generate a deterministic market from the given config and seed.
@@ -22,7 +23,7 @@ use crate::protocol::market::{Fee, Market, Token, TokenPair};
 /// values directly; cross pair prices are derived from the two underlying
 /// USD prices — so the market starts in equilibrium (no arbs at t=0).
 /// Volumes are independent samples from `volume_usd` per pair.
-pub fn generate(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
+pub fn generate_market(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
     ensure!(
         cfg.token_count >= 2,
         "token_count must be at least 2 (USD + 1)"
@@ -82,11 +83,10 @@ pub fn generate(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
         let base_decimals = tokens[t as usize].decimals;
         let pu = usd_price_atomic[t as usize];
 
-        // price field is already atomic-quote per whole-base, and pu is
-        // atomic-USD per whole-T, so this is direct.
+        // USD pair: price (atomic-quote per whole-base) equals the token's
+        // atomic-USD price directly, since quote IS USD.
         let price = pu;
-        let vol_usd_atomic =
-            rng.gen_range(cfg.volume_usd.min..=cfg.volume_usd.max) * usd_scale;
+        let vol_usd_atomic = rng.gen_range(cfg.volume_usd.min..=cfg.volume_usd.max) * usd_scale;
         let volume = volume_atomic(vol_usd_atomic, base_decimals, pu);
 
         pairs.push(TokenPair {
@@ -120,12 +120,8 @@ pub fn generate(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
         let pu_base = usd_price_atomic[base as usize];
         let pu_quote = usd_price_atomic[quote as usize];
 
-        // price = atomic-quote per whole-base = (pu_base / pu_quote) * 10^quote_decimals.
-        // The 10^usd_decimals factor inside pu_base and pu_quote cancels.
-        let price =
-            (u128::from(pu_base) * u128::from(pow10(quote_decimals)) / u128::from(pu_quote)) as u64;
-        let vol_usd_atomic =
-            rng.gen_range(cfg.volume_usd.min..=cfg.volume_usd.max) * usd_scale;
+        let price = cross_pair_price(pu_base, pu_quote, quote_decimals);
+        let vol_usd_atomic = rng.gen_range(cfg.volume_usd.min..=cfg.volume_usd.max) * usd_scale;
         let volume = volume_atomic(vol_usd_atomic, base_decimals, pu_base);
 
         pairs.push(TokenPair {
@@ -146,15 +142,6 @@ pub fn generate(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
     Ok(Market { fee, tokens, pairs })
 }
 
-fn pow10(n: u64) -> u64 {
-    10u64.pow(n as u32)
-}
-
-/// `volume in atomic-base = vol_usd_atomic * 10^base_decimals / pu_atomic`,
-/// where `pu_atomic` is the base token's price in atomic-USD per whole-base.
-fn volume_atomic(vol_usd_atomic: u64, base_decimals: u64, pu_atomic: u64) -> u64 {
-    (u128::from(vol_usd_atomic) * u128::from(pow10(base_decimals)) / u128::from(pu_atomic)) as u64
-}
 
 #[cfg(test)]
 mod tests {
@@ -164,7 +151,7 @@ mod tests {
     #[test]
     fn real_config_generates_expected_counts() {
         let cfg = load_config().unwrap();
-        let market = generate(&cfg, 42).unwrap();
+        let market = generate_market(&cfg, 42).unwrap();
         assert_eq!(market.tokens.len() as u64, cfg.token_count);
         assert_eq!(market.pairs.len() as u64, cfg.pair_count);
     }
@@ -172,7 +159,7 @@ mod tests {
     #[test]
     fn token_0_is_usd() {
         let cfg = load_config().unwrap();
-        let market = generate(&cfg, 42).unwrap();
+        let market = generate_market(&cfg, 42).unwrap();
         assert_eq!(market.tokens[0].id, 0);
         assert_eq!(market.tokens[0].decimals, cfg.usd_decimals);
     }
@@ -180,7 +167,7 @@ mod tests {
     #[test]
     fn all_non_usd_tokens_have_usd_pair_first() {
         let cfg = load_config().unwrap();
-        let market = generate(&cfg, 42).unwrap();
+        let market = generate_market(&cfg, 42).unwrap();
         // first (token_count - 1) pairs are USD pairs (quote = 0)
         for i in 0..(cfg.token_count - 1) as usize {
             assert_eq!(market.pairs[i].quote, 0, "pair {i} should be USD quote");
@@ -203,7 +190,7 @@ mod tests {
     #[test]
     fn cross_pair_price_derived_from_usd_prices() {
         let cfg = load_config().unwrap();
-        let market = generate(&cfg, 42).unwrap();
+        let market = generate_market(&cfg, 42).unwrap();
 
         // USD pair prices ARE the token's atomic-USD price.
         let mut pu_atomic = vec![pow10(cfg.usd_decimals); cfg.token_count as usize];
@@ -213,9 +200,11 @@ mod tests {
         }
         for p in market.pairs.iter().skip(usd_pair_count) {
             let quote_d = market.tokens[p.quote as usize].decimals;
-            let expected = (u128::from(pu_atomic[p.base as usize])
-                * u128::from(pow10(quote_d))
-                / u128::from(pu_atomic[p.quote as usize])) as u64;
+            let expected = cross_pair_price(
+                pu_atomic[p.base as usize],
+                pu_atomic[p.quote as usize],
+                quote_d,
+            );
             assert_eq!(p.price, expected, "cross pair {:?} price mismatch", p.id);
         }
     }
@@ -223,7 +212,7 @@ mod tests {
     #[test]
     fn usd_pair_price_is_within_atomic_usd_range() {
         let cfg = load_config().unwrap();
-        let market = generate(&cfg, 42).unwrap();
+        let market = generate_market(&cfg, 42).unwrap();
         let scale = pow10(cfg.usd_decimals);
         let lo = cfg.price_usd.min * scale;
         let hi = cfg.price_usd.max * scale;
@@ -239,8 +228,8 @@ mod tests {
     #[test]
     fn deterministic_for_same_seed() {
         let cfg = load_config().unwrap();
-        let a = generate(&cfg, 7).unwrap();
-        let b = generate(&cfg, 7).unwrap();
+        let a = generate_market(&cfg, 7).unwrap();
+        let b = generate_market(&cfg, 7).unwrap();
         assert_eq!(a.tokens.len(), b.tokens.len());
         assert_eq!(a.pairs.len(), b.pairs.len());
         for (p1, p2) in a.pairs.iter().zip(b.pairs.iter()) {
@@ -256,7 +245,7 @@ mod tests {
         let mut cfg = load_config().unwrap();
         cfg.token_count = 10;
         cfg.pair_count = 5; // less than 9 (USD pairs needed)
-        let err = generate(&cfg, 0).unwrap_err();
+        let err = generate_market(&cfg, 0).unwrap_err();
         assert!(err.to_string().contains("at least"), "{err}");
     }
 
@@ -266,7 +255,7 @@ mod tests {
         cfg.token_count = 5;
         // max = 4 USD pairs + C(4,2)=6 cross = 10. request 11.
         cfg.pair_count = 11;
-        let err = generate(&cfg, 0).unwrap_err();
+        let err = generate_market(&cfg, 0).unwrap_err();
         assert!(err.to_string().contains("exceeds"), "{err}");
     }
 }

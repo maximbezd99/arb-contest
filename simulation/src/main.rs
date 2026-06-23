@@ -8,9 +8,8 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::SimConfig;
-use crate::generation::generate_market::generate;
-
-const MARKET_SEED: u64 = 0;
+use crate::generation::generate_feed::{feed_stats, generate_feed};
+use crate::generation::generate_market::generate_market;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,14 +23,32 @@ async fn main() -> anyhow::Result<()> {
     info!(?cfg, "starting simulation server");
 
     let gen_cfg = generation::config::load_config()?;
-    gen_cfg.check_no_overflow()?;
+    gen_cfg.sanity_check()?;
     info!(?gen_cfg, "generation config loaded and validated");
 
-    let market = generate(&gen_cfg, MARKET_SEED)?;
+    const MARKET_SEED: u64 = 0;
+    const FEED_SEED: u64 = 1;
+
+    let market = generate_market(&gen_cfg, MARKET_SEED)?;
     info!(
         tokens = market.tokens.len(),
         pairs = market.pairs.len(),
         "market generated"
+    );
+
+    let feed = generate_feed(&market, &gen_cfg, FEED_SEED)?;
+    let stats = feed_stats(&feed);
+    info!(
+        ticks = stats.total_ticks,
+        duration_ms = stats.duration_us / 1_000,
+        avg_ticks_per_ms = format!("{:.2}", stats.avg_ticks_per_ms),
+        peak_ticks_per_ms = stats.peak_ticks_per_ms,
+        pairs_touched = stats.distinct_pairs_touched,
+        total_pairs = market.pairs.len(),
+        min_ticks_per_pair = stats.min_ticks_per_touched_pair,
+        avg_ticks_per_pair = format!("{:.2}", stats.avg_ticks_per_touched_pair),
+        max_ticks_per_pair = stats.max_ticks_per_touched_pair,
+        "feed generated"
     );
 
     let http_task = tokio::spawn(net::http::run(cfg.http_bind, market));
