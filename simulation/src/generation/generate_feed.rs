@@ -301,14 +301,15 @@ pub fn feed_stats(feed: &[FeedTick]) -> FeedStats {
     }
 
     let mut absolute: u64 = 0;
-    let mut per_ms_counts: std::collections::HashMap<u64, u64> =
-        std::collections::HashMap::new();
+    let mut per_ms_counts: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
     let mut per_pair_counts: std::collections::HashMap<u64, usize> =
         std::collections::HashMap::new();
     for tick in feed {
         absolute += tick.delay_us;
         *per_ms_counts.entry(absolute / 1_000).or_default() += 1;
-        *per_pair_counts.entry(tick.update.token_pair_id).or_default() += 1;
+        *per_pair_counts
+            .entry(tick.update.token_pair_id)
+            .or_default() += 1;
     }
 
     let duration_us = absolute;

@@ -142,7 +142,6 @@ pub fn generate_market(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
     Ok(Market { fee, tokens, pairs })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

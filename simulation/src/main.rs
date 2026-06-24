@@ -1,42 +1,77 @@
 mod config;
+mod cores;
+mod engine;
 mod generation;
 mod net;
 mod protocol;
 
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use clap::Parser;
-use tracing::{error, info};
+use signal_hook::{
+    consts::{SIGINT, SIGTERM},
+    iterator::Signals,
+};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::SimConfig;
-use crate::generation::generate_feed::{feed_stats, generate_feed};
-use crate::generation::generate_market::generate_market;
+use crate::{
+    config::SimConfig,
+    engine::runloop,
+    generation::{
+        generate_feed::{feed_stats, generate_feed},
+        generate_market::generate_market,
+    },
+    net::http,
+    protocol::market::serialize_market,
+};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+const BOOT_WAIT: Duration = Duration::from_secs(30);
+
+fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let cfg = SimConfig::parse();
     info!(?cfg, "starting simulation server");
 
+    let cores = cores::pick_cores()?;
+
+    let market_seed = cfg.seed;
+    let feed_seed = cfg.seed.wrapping_add(1);
+    let contestant_id_seed = cfg.seed.wrapping_add(2);
+
+    let registered_ids = Arc::new(Mutex::new(HashSet::<u64>::new()));
+    let ready_ids = Arc::new(Mutex::new(HashSet::<u64>::new()));
+
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    std::thread::spawn({
+        let shutdown_flag = shutdown_flag.clone();
+        move || block(shutdown_flag.clone())
+    });
+
     let gen_cfg = generation::config::load_config()?;
     gen_cfg.sanity_check()?;
     info!(?gen_cfg, "generation config loaded and validated");
 
-    const MARKET_SEED: u64 = 0;
-    const FEED_SEED: u64 = 1;
-
-    let market = generate_market(&gen_cfg, MARKET_SEED)?;
+    let market = generate_market(&gen_cfg, market_seed)?;
     info!(
         tokens = market.tokens.len(),
         pairs = market.pairs.len(),
         "market generated"
     );
 
-    let feed = generate_feed(&market, &gen_cfg, FEED_SEED)?;
+    let feed = generate_feed(&market, &gen_cfg, feed_seed)?;
     let stats = feed_stats(&feed);
     info!(
         ticks = stats.total_ticks,
@@ -51,22 +86,124 @@ async fn main() -> anyhow::Result<()> {
         "feed generated"
     );
 
-    let http_task = tokio::spawn(net::http::run(cfg.http_bind, market));
+    let (udp_tx, udp_rx) = crossbeam_channel::unbounded();
+    let udp_handle = net::udp::spawn(cores.udp, cfg.udp_bind, cfg.udp_target, udp_rx)?;
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("shutdown signal received");
+    let (tcp_tx, tcp_rx) = crossbeam_channel::unbounded();
+    let tcp_handle = net::tcp::spawn(
+        cores.tcp,
+        cfg.tcp_submission_bind,
+        tcp_tx,
+        registered_ids.clone(),
+        shutdown_flag.clone(),
+    )?;
+
+    let market_bytes = Bytes::from(serialize_market(&market));
+    drop(market);
+
+    let configuration_complete = Arc::new(AtomicBool::new(false));
+    let http_state = http::HttpServerState::new(
+        market_bytes,
+        contestant_id_seed,
+        registered_ids.clone(),
+        ready_ids.clone(),
+        configuration_complete.clone(),
+    );
+    let _ = http::spawn(cores.tokio, cfg.http_bind, http_state);
+
+    info!(
+        expected = cfg.expected_contestants,
+        boot_wait_ms = BOOT_WAIT.as_millis() as u64,
+        "simulation ready; waiting for contestants to /register, connect, and /ready",
+    );
+
+    let mut elapsed_sec = Duration::ZERO;
+    loop {
+        let one_sec = Duration::from_secs(1);
+        std::thread::sleep(one_sec);
+
+        if shutdown_flag.load(Ordering::Relaxed) {
+            return Ok(());
         }
-        res = http_task => log_task("http", res),
+
+        let current_contestants = ready_ids
+            .lock()
+            .expect("can't acquire ready_ids lock in main")
+            .len();
+
+        if current_contestants > cfg.expected_contestants {
+            panic!("More contestants than expected");
+        } else if current_contestants == cfg.expected_contestants {
+            break;
+        } else if elapsed_sec > BOOT_WAIT {
+            panic!("Contestants didn't connect");
+        }
+
+        elapsed_sec += one_sec;
     }
+
+    configuration_complete.store(true, Ordering::Relaxed);
+
+    let runloop_handle = runloop::spawn(
+        cores.runloop,
+        feed,
+        udp_tx.clone(),
+        tcp_rx,
+        shutdown_flag.clone(),
+    );
+
+    let outcome = runloop_handle
+        .join()
+        .map_err(|_| anyhow!("fail to join runloop thread"))?;
+    info!(
+        dispatched = outcome.dispatched,
+        udp_dispatch_errors = outcome.udp_dispatch_errors,
+        submissions_received = outcome.submissions_received,
+        final_overshoot_ns = outcome.final_overshoot_ns,
+        late_ticks = outcome.late_ticks,
+        "engine thread finished:",
+    );
+
+    outcome.iter_stats.info("iter");
+    outcome.read_stats.info("read");
+    outcome.wait_stats.info("wait");
+    outcome.send_stats.info("send");
+    outcome.overshoot_stats.info("overshoot");
+
+    shutdown_flag.store(true, Ordering::Relaxed);
+    drop(udp_tx);
+
+    let udp_sender_outcome = udp_handle
+        .join()
+        .map_err(|_| anyhow!("fail to join udp thread"))?;
+    info!(
+        sent = udp_sender_outcome.sent,
+        send_errors = udp_sender_outcome.send_errors,
+        "udp thread finished:",
+    );
+
+    let submissions_outcome = tcp_handle
+        .join()
+        .map_err(|_| anyhow!("fail to join submissions thread"))?;
+
+    info!(
+        streams_accepted = submissions_outcome.streams_accepted,
+        streams_rejected = submissions_outcome.streams_rejected,
+        streams_replaced = submissions_outcome.streams_replaced,
+        streams_disconnected = submissions_outcome.streams_disconnected,
+        bytes_read = submissions_outcome.bytes_read,
+        submissions_forwarded = submissions_outcome.submissions_forwarded,
+        submissions_dropped_bad = submissions_outcome.submissions_dropped_bad,
+        "submissions thread finished:",
+    );
 
     Ok(())
 }
 
-fn log_task(name: &str, res: Result<anyhow::Result<()>, tokio::task::JoinError>) {
-    match res {
-        Ok(Ok(())) => info!(task = name, "task finished"),
-        Ok(Err(e)) => error!(task = name, error = %e, "task failed"),
-        Err(e) => error!(task = name, error = %e, "task panicked"),
+fn block(shutdown: Arc<AtomicBool>) {
+    let mut signals = Signals::new([SIGTERM, SIGINT]).expect("can't construct signals list");
+    if signals.forever().next().is_some() {
+        info!("Shutdown signal received");
+        shutdown.store(true, Ordering::Relaxed);
     }
 }

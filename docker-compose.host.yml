@@ -1,8 +1,0 @@
-# Overlay applied for the real contest on Linux: zero-overhead host networking,
-# real multicast on the host's NIC. Compose ignores `networks:` / `ports:` from
-# the base file once `network_mode: host` is set.
-services:
-  simulation:
-    network_mode: host
-  example-bot:
-    network_mode: host
