@@ -17,7 +17,7 @@
   "static_fee_atomic_usd": 10000,
   "variable_fee_bps": 5,
   "arb_count": 100000,
-  "updates_per_ms": 10,
+  "updates_per_ms": 50,
   "rebalance_delay_us": {
     "min": 100,
     "max": 900

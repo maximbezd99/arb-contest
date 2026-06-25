@@ -16,25 +16,28 @@ const LATE_THRESHOLD_NS: u64 = 10_000;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StageStats {
+    pub name: &'static str,
+    pub unit: &'static str,
     pub count: u64,
-    pub total_ns: u64,
-    pub avg_ns: u64,
-    pub p50_ns: u64,
-    pub p95_ns: u64,
-    pub max_ns: u64,
+    pub total: u64,
+    pub avg: u64,
+    pub p50: u64,
+    pub p95: u64,
+    pub max: u64,
 }
 
 impl StageStats {
-    pub fn info(&self, name: &str) {
+    pub fn info(&self) {
         info!(
-            stage = name,
+            stage = self.name,
+            unit = self.unit,
             count = self.count,
-            total_ms = self.total_ns / 1_000_000,
-            avg_ns = self.avg_ns,
-            p50_ns = self.p50_ns,
-            p95_ns = self.p95_ns,
-            max_ns = self.max_ns,
-            "runloop stage timing:",
+            total = self.total,
+            avg = self.avg,
+            p50 = self.p50,
+            p95 = self.p95,
+            max = self.max,
+            "runloop stage stats:",
         );
     }
 }
@@ -63,6 +66,8 @@ pub struct RunloopOutcome {
     pub iter_stats: StageStats,
     /// Per-tick overshoot distribution.
     pub overshoot_stats: StageStats,
+    /// Depth of the UDP send channel.
+    pub udp_queue_depth_stats: StageStats,
 }
 
 pub fn spawn(
@@ -105,6 +110,7 @@ fn run(
     let mut send_hist = Histogram::new();
     let mut iter_hist = Histogram::new();
     let mut overshoot_hist = Histogram::new();
+    let mut udp_queue_depth_hist = Histogram::new();
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
@@ -150,7 +156,10 @@ fn run(
 
         let send_start = after_read;
         match udp_tx.try_send(feed[idx].update) {
-            Ok(()) => dispatched += 1,
+            Ok(()) => {
+                dispatched += 1;
+                udp_queue_depth_hist.record(udp_tx.len() as u64);
+            }
             Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
                 udp_dispatch_errors += 1;
             }
@@ -171,11 +180,12 @@ fn run(
         submissions_received,
         final_overshoot_ns: overshoot_ns,
         late_ticks,
-        read_stats: read_hist.stats(),
-        wait_stats: wait_hist.stats(),
-        send_stats: send_hist.stats(),
-        iter_stats: iter_hist.stats(),
-        overshoot_stats: overshoot_hist.stats(),
+        read_stats: read_hist.stats("read", "ns"),
+        wait_stats: wait_hist.stats("wait", "ns"),
+        send_stats: send_hist.stats("send", "ns"),
+        iter_stats: iter_hist.stats("iter", "ns"),
+        overshoot_stats: overshoot_hist.stats("overshoot", "ns"),
+        udp_queue_depth_stats: udp_queue_depth_hist.stats("udp_queue_depth", "items"),
     }
 }
 
@@ -231,19 +241,25 @@ impl Histogram {
         self.max_ns
     }
 
-    fn stats(self) -> StageStats {
+    fn stats(self, name: &'static str, unit: &'static str) -> StageStats {
         if self.count == 0 {
-            return StageStats::default();
+            return StageStats {
+                name,
+                unit,
+                ..StageStats::default()
+            };
         }
-        let total_ns = self.total_ns.min(u64::MAX as u128) as u64;
-        let avg_ns = (self.total_ns / self.count as u128) as u64;
+        let total = self.total_ns.min(u64::MAX as u128) as u64;
+        let avg = (self.total_ns / self.count as u128) as u64;
         StageStats {
+            name,
+            unit,
             count: self.count,
-            total_ns,
-            avg_ns,
-            p50_ns: self.percentile(0.5),
-            p95_ns: self.percentile(0.95),
-            max_ns: self.max_ns,
+            total,
+            avg,
+            p50: self.percentile(0.5),
+            p95: self.percentile(0.95),
+            max: self.max_ns,
         }
     }
 }

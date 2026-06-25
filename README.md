@@ -64,4 +64,4 @@ You can adjust `simulation/config.json` (you can see doc for it in `simulation/s
 
 Files with structs related to simultion <-> bot communication you can find in `simulation/src/protocol`. Reference `contestants/example-bot` to see how binary `/market` data can be parsed. This endpoint exists (in addition to `/market/json`) because not all languages have built-in json support.
 
-After simulation is finished check out stats printed. `final_overshoot_ns` must be low (for me it's usually <100), if it's high every run it means the machine is not keeping up with the volume of updates on simulation side. But it's more realistic that the UDP sender would be lagging behind instead.
+After simulation is finished check out stats printed. `final_overshoot_ns` must be low (for me it's usually <100), if it's high every run it means the machine is not keeping up with the volume of updates on simulation side. But it's more realistic that the UDP sender would be lagging behind instead. To see if UDP sender is lagging you can check `udp_queue_depth` - it shouldn't have too big numbers, otherwise it means that UDP sender is lagging behind a simulation.

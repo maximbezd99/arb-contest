@@ -167,13 +167,15 @@ fn main() -> Result<()> {
         "engine thread finished:",
     );
 
-    outcome.iter_stats.info("iter");
-    outcome.read_stats.info("read");
-    outcome.wait_stats.info("wait");
-    outcome.send_stats.info("send");
-    outcome.overshoot_stats.info("overshoot");
+    outcome.iter_stats.info();
+    outcome.read_stats.info();
+    outcome.wait_stats.info();
+    outcome.send_stats.info();
+    outcome.overshoot_stats.info();
+    outcome.udp_queue_depth_stats.info();
 
     shutdown_flag.store(true, Ordering::Relaxed);
+    let drain_started = std::time::Instant::now();
     drop(udp_tx);
 
     let udp_sender_outcome = udp_handle
@@ -182,6 +184,7 @@ fn main() -> Result<()> {
     info!(
         sent = udp_sender_outcome.sent,
         send_errors = udp_sender_outcome.send_errors,
+        drain_duration_ms = drain_started.elapsed().as_millis() as u64,
         "udp thread finished:",
     );
 
