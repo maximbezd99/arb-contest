@@ -99,11 +99,14 @@ fn main() -> Result<()> {
     )?;
 
     let market_bytes = Bytes::from(serialize_market(&market));
+    let market_json_bytes =
+        Bytes::from(serde_json::to_vec(&market).expect("serialize market to json"));
     drop(market);
 
     let configuration_complete = Arc::new(AtomicBool::new(false));
     let http_state = http::HttpServerState::new(
         market_bytes,
+        market_json_bytes,
         contestant_id_seed,
         registered_ids.clone(),
         ready_ids.clone(),

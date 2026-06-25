@@ -155,12 +155,10 @@ struct Config {
 
 impl Config {
     fn parse() -> Self {
-        let sim_http_addr =
-            env::var("SIM_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:9003".to_string());
-        let sim_udp_group =
-            env::var("SIM_UDP_GROUP").unwrap_or_else(|_| "239.42.0.1:9001".to_string());
+        let sim_http_addr = env::var("SIM_HTTP_ADDR").expect("SIM_HTTP_ADDR must be set");
+        let sim_udp_group = env::var("SIM_UDP_GROUP").expect("SIM_UDP_GROUP must be set");
         let sim_submission_addr =
-            env::var("SIM_SUBMISSION_ADDR").unwrap_or_else(|_| "127.0.0.1:9002".to_string());
+            env::var("SIM_SUBMISSION_ADDR").expect("SIM_SUBMISSION_ADDR must be set");
         Self {
             sim_http_addr,
             sim_submission_addr,

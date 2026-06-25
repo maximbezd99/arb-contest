@@ -28,6 +28,7 @@ use crate::cores;
 #[derive(Clone)]
 pub struct HttpServerState {
     market_bytes: Bytes,
+    market_json_bytes: Bytes,
     /// Seeded RNG used to mint contestant IDs at `/register` time.
     contestant_id_rng: Arc<Mutex<Pcg64Mcg>>,
     /// IDs handed out by `/register`.
@@ -41,6 +42,7 @@ pub struct HttpServerState {
 impl HttpServerState {
     pub fn new(
         market_bytes: Bytes,
+        market_json_bytes: Bytes,
         seed: u64,
         registered_ids: Arc<Mutex<HashSet<u64>>>,
         ready_ids: Arc<Mutex<HashSet<u64>>>,
@@ -48,6 +50,7 @@ impl HttpServerState {
     ) -> Self {
         Self {
             market_bytes,
+            market_json_bytes,
             contestant_id_rng: Arc::new(Mutex::new(Pcg64Mcg::seed_from_u64(seed))),
             registered_ids,
             ready_ids,
@@ -81,6 +84,7 @@ async fn server(bind: SocketAddr, state: HttpServerState) -> Result<()> {
     let app = Router::new()
         .route("/health", get(get_health))
         .route("/market", get(get_market))
+        .route("/market/json", get(get_market_json))
         .route("/register", post(post_register))
         .route("/:id/ready", post(post_ready))
         .with_state(state);
@@ -106,6 +110,15 @@ async fn get_market(State(state): State<HttpServerState>) -> impl IntoResponse {
 
     let bytes = state.market_bytes.clone();
     ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
+}
+
+async fn get_market_json(State(state): State<HttpServerState>) -> impl IntoResponse {
+    if state.configuration_complete.load(Ordering::Relaxed) {
+        return (StatusCode::SERVICE_UNAVAILABLE).into_response();
+    }
+
+    let bytes = state.market_json_bytes.clone();
+    ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
 }
 
 async fn post_register(State(state): State<HttpServerState>) -> impl IntoResponse {

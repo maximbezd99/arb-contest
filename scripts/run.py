@@ -44,7 +44,7 @@ DEFAULTS = {
 }
 
 # Simulation owns 0-3 (set statically in compose). Contestants are assigned
-# 2 consecutive cores each starting here, in the order they appear on argv.
+# 3 consecutive cores each starting here, in the order they appear on argv.
 CONTESTANT_CORE_BASE = 4
 CORES_PER_CONTESTANT = 3
 UNUSED_CPUSET = "0"

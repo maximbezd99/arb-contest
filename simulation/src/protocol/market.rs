@@ -1,4 +1,6 @@
-#[derive(Debug, Clone)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Market {
     /// Flat + variable fee schedule applied uniformly to every leg.
     pub fee: Fee,
@@ -8,7 +10,7 @@ pub struct Market {
     pub pairs: Vec<TokenPair>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct Fee {
     /// Flat per-leg fee, in **atomic-USD**. Charged once per leg regardless of fill size.
     pub static_atomic_usd: u64,
@@ -16,7 +18,7 @@ pub struct Fee {
     pub variable_bps: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct Token {
     /// Sequential id assigned at generation time. Id 0 is USD.
     pub id: u64,
@@ -25,7 +27,7 @@ pub struct Token {
     pub decimals: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct TokenPair {
     /// Id assigned at generation time.
     pub id: u64,
