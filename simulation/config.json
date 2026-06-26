@@ -14,7 +14,7 @@
   },
   "token_count": 1000,
   "pair_count": 10000,
-  "static_fee_atomic_usd": 10000,
+  "static_fee_atomic_usd": 1000,
   "variable_fee_bps": 5,
   "arb_count": 100000,
   "updates_per_sec": 1,

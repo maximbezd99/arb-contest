@@ -20,14 +20,14 @@ use tracing::{info, warn};
 
 use crate::{
     cores,
-    protocol::submission::{DeserializeError, RouteSubmission, SubmissionResponse, MAX_SUBMISSION_SIZE},
+    protocol::submission::{DeserializeError, RouteSubmission, SubmissionResponse, MAX_SUBMISSION_WIRE_SIZE},
 };
 
 const SUBMISSION_READ_BUF: usize = 4096;
 const RESPONSE_CHANNEL_CAP: usize = 1024;
 
 // The reader's accumulator must be large enough to hold one full submission
-const _: () = assert!(SUBMISSION_READ_BUF >= MAX_SUBMISSION_SIZE);
+const _: () = assert!(SUBMISSION_READ_BUF >= MAX_SUBMISSION_WIRE_SIZE);
 
 #[derive(Debug)]
 pub struct ContestantSubmission {
@@ -249,7 +249,7 @@ async fn read_stream(
 async fn write_stream(mut write_half: OwnedWriteHalf, mut resp_rx: mpsc::Receiver<oneshot::Receiver<SubmissionResponse>>) {
     while let Some(rx) = resp_rx.recv().await {
         if let Ok(resp) = rx.await {
-            if write_half.write_all(resp.as_bytes()).await.is_err() {
+            if write_half.write_all(&resp.to_bytes()).await.is_err() {
                 return;
             }
         }

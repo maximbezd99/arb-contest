@@ -6,7 +6,6 @@ pub struct RouteSubmission {
     pub legs: Vec<RouteSubmissionLeg>,
 }
 
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RouteSubmissionLeg {
     /// Pair to trade on.
@@ -24,7 +23,7 @@ pub struct RouteSubmissionLeg {
     pub volume: u64,
 }
 
-#[repr(u64)]
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Buy = 0,
@@ -32,14 +31,19 @@ pub enum Direction {
 }
 
 /// `[sub_id u64 LE][num_legs u8]`. Leg payload follows.
-pub const SUBMISSION_HEADER_SIZE: usize = 9;
+pub const SUBMISSION_HEADER_WIRE_SIZE: usize = 9;
 
 /// Hard cap on legs per submission. Anything above is treated as a framing
 /// error and the stream is dropped with `DeserializeError::TooManyLegs`.
 pub const MAX_LEGS: u8 = 32;
 
+impl RouteSubmissionLeg {
+    /// On-the-wire bytes per submission leg.
+    pub const WIRE_SIZE: usize = 25;
+}
+
 /// Maximum on-the-wire bytes for one valid submission.
-pub const MAX_SUBMISSION_SIZE: usize = SUBMISSION_HEADER_SIZE + (MAX_LEGS as usize) * std::mem::size_of::<RouteSubmissionLeg>();
+pub const MAX_SUBMISSION_WIRE_SIZE: usize = SUBMISSION_HEADER_WIRE_SIZE + (MAX_LEGS as usize) * RouteSubmissionLeg::WIRE_SIZE;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DeserializeError {
@@ -50,7 +54,7 @@ pub enum DeserializeError {
     /// `num_legs > MAX_LEGS` — almost certainly a desync.
     TooManyLegs { got: u8, max: u8 },
     /// `direction` was neither `Buy (0)` nor `Sell (1)` — almost certainly a desync.
-    BadDirection { value: u64 },
+    BadDirection { value: u8 },
 }
 
 impl fmt::Display for DeserializeError {
@@ -70,15 +74,11 @@ impl fmt::Display for DeserializeError {
 
 impl std::error::Error for DeserializeError {}
 
-impl RouteSubmissionLeg {
-    pub const SIZE: usize = std::mem::size_of::<Self>();
-}
-
 impl RouteSubmission {
     /// Try to parse one submission off the front of `buf`.
     /// Returns the parsed submission and the number of bytes consumed.
     pub fn deserialize(buf: &[u8]) -> Result<(Self, usize), DeserializeError> {
-        if buf.len() < SUBMISSION_HEADER_SIZE {
+        if buf.len() < SUBMISSION_HEADER_WIRE_SIZE {
             return Err(DeserializeError::Incomplete);
         }
 
@@ -96,24 +96,24 @@ impl RouteSubmission {
         }
 
         let num_legs = num_legs_byte as usize;
-        let legs_bytes = num_legs * RouteSubmissionLeg::SIZE;
-        let total = SUBMISSION_HEADER_SIZE + legs_bytes;
+        let legs_bytes = num_legs * RouteSubmissionLeg::WIRE_SIZE;
+        let total = SUBMISSION_HEADER_WIRE_SIZE + legs_bytes;
         if buf.len() < total {
             return Err(DeserializeError::Incomplete);
         }
 
         let mut legs: Vec<RouteSubmissionLeg> = Vec::with_capacity(num_legs);
         for i in 0..num_legs {
-            let off = SUBMISSION_HEADER_SIZE + i * RouteSubmissionLeg::SIZE;
+            let off = SUBMISSION_HEADER_WIRE_SIZE + i * RouteSubmissionLeg::WIRE_SIZE;
             let pair_id = u64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
-            let dir_val = u64::from_le_bytes(buf[off + 8..off + 16].try_into().unwrap());
+            let dir_val = buf[off + 8];
             let direction = match dir_val {
                 0 => Direction::Buy,
                 1 => Direction::Sell,
                 _ => return Err(DeserializeError::BadDirection { value: dir_val }),
             };
-            let price = u64::from_le_bytes(buf[off + 16..off + 24].try_into().unwrap());
-            let volume = u64::from_le_bytes(buf[off + 24..off + 32].try_into().unwrap());
+            let price = u64::from_le_bytes(buf[off + 9..off + 17].try_into().unwrap());
+            let volume = u64::from_le_bytes(buf[off + 17..off + 25].try_into().unwrap());
             legs.push(RouteSubmissionLeg {
                 pair_id,
                 direction,
@@ -126,18 +126,25 @@ impl RouteSubmission {
     }
 }
 
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SubmissionResponse {
     pub sub_id: u64,
-    pub ok: u64,
+    /// 1 = accepted, 0 = rejected.
+    pub ok: u8,
     /// Contestant's balance after this submission, in atomic-USD. **Signed**.
     pub balance: i64,
 }
 
 impl SubmissionResponse {
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, std::mem::size_of::<Self>()) }
+    /// On-the-wire bytes per response: `sub_id u64`, `ok u8`, `balance i64`.
+    pub const WIRE_SIZE: usize = 17;
+
+    pub fn to_bytes(&self) -> [u8; Self::WIRE_SIZE] {
+        let mut buf = [0u8; Self::WIRE_SIZE];
+        buf[0..8].copy_from_slice(&self.sub_id.to_le_bytes());
+        buf[8] = self.ok;
+        buf[9..17].copy_from_slice(&self.balance.to_le_bytes());
+        buf
     }
 }
 
@@ -145,17 +152,17 @@ impl SubmissionResponse {
 mod tests {
     use super::*;
 
-    fn leg_bytes(pair_id: u64, dir: u64, price: u64, volume: u64) -> [u8; RouteSubmissionLeg::SIZE] {
-        let mut b = [0u8; RouteSubmissionLeg::SIZE];
+    fn leg_bytes(pair_id: u64, dir: u8, price: u64, volume: u64) -> [u8; RouteSubmissionLeg::WIRE_SIZE] {
+        let mut b = [0u8; RouteSubmissionLeg::WIRE_SIZE];
         b[0..8].copy_from_slice(&pair_id.to_le_bytes());
-        b[8..16].copy_from_slice(&dir.to_le_bytes());
-        b[16..24].copy_from_slice(&price.to_le_bytes());
-        b[24..32].copy_from_slice(&volume.to_le_bytes());
+        b[8] = dir;
+        b[9..17].copy_from_slice(&price.to_le_bytes());
+        b[17..25].copy_from_slice(&volume.to_le_bytes());
         b
     }
 
-    fn frame(sub_id: u64, legs: &[[u8; RouteSubmissionLeg::SIZE]]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(SUBMISSION_HEADER_SIZE + legs.len() * RouteSubmissionLeg::SIZE);
+    fn frame(sub_id: u64, legs: &[[u8; RouteSubmissionLeg::WIRE_SIZE]]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(SUBMISSION_HEADER_WIRE_SIZE + legs.len() * RouteSubmissionLeg::WIRE_SIZE);
         out.extend_from_slice(&sub_id.to_le_bytes());
         out.push(legs.len() as u8);
         for l in legs {
@@ -165,8 +172,8 @@ mod tests {
     }
 
     #[test]
-    fn leg_size_is_32() {
-        assert_eq!(RouteSubmissionLeg::SIZE, 32);
+    fn leg_wire_size_is_25() {
+        assert_eq!(RouteSubmissionLeg::WIRE_SIZE, 25);
     }
 
     #[test]
@@ -254,16 +261,16 @@ mod tests {
     }
 
     #[test]
-    fn response_as_bytes_roundtrip() {
+    fn response_to_bytes_roundtrip() {
         let r = SubmissionResponse {
             sub_id: 0xDEAD_BEEF,
             ok: 1,
             balance: -1_234_567,
         };
-        let bytes = r.as_bytes();
-        assert_eq!(bytes.len(), std::mem::size_of::<SubmissionResponse>());
+        let bytes = r.to_bytes();
+        assert_eq!(bytes.len(), SubmissionResponse::WIRE_SIZE);
         assert_eq!(u64::from_le_bytes(bytes[0..8].try_into().unwrap()), r.sub_id);
-        assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), r.ok);
-        assert_eq!(i64::from_le_bytes(bytes[16..24].try_into().unwrap()), r.balance);
+        assert_eq!(bytes[8], r.ok);
+        assert_eq!(i64::from_le_bytes(bytes[9..17].try_into().unwrap()), r.balance);
     }
 }

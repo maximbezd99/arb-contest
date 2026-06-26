@@ -225,8 +225,8 @@ fn evaluate(
     contestants: &mut HashMap<u64, Contestant>,
     contestant_id: u64,
     submission: &RouteSubmission,
-) -> (u64, i64) {
-    fn bail(contestant: &mut Contestant, fees: u64) -> (u64, i64) {
+) -> (u8, i64) {
+    fn bail(contestant: &mut Contestant, fees: u64) -> (u8, i64) {
         contestant.balance -= fees as i64;
         (0, contestant.balance)
     }

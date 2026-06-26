@@ -1,7 +1,9 @@
 use std::env;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{Ipv4Addr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::process::ExitCode;
+
+use nix::sys::socket::{bind, setsockopt, socket, sockopt, AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn};
 
 mod market;
 
@@ -42,11 +44,7 @@ fn run() -> io::Result<()> {
     let feed_group = config.sim_udp_group;
     let udp_handle = std::thread::spawn(move || listen_feed(&feed_group));
 
-    http_request(
-        &config.sim_http_addr,
-        "POST",
-        &format!("/{contestant_id}/ready"),
-    )?;
+    http_request(&config.sim_http_addr, "POST", &format!("/{contestant_id}/ready"))?;
     eprintln!("[example-bot] /{contestant_id}/ready ok");
 
     let _udp_result = udp_handle.join();
@@ -55,24 +53,15 @@ fn run() -> io::Result<()> {
 }
 
 fn listen_feed(group: &str) -> io::Result<()> {
-    let (ip_str, port_str) = group.rsplit_once(':').ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("SIM_UDP_GROUP missing port: {group}"),
-        )
-    })?;
-    let ip: Ipv4Addr = ip_str.parse().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("bad multicast ip {ip_str}: {e}"),
-        )
-    })?;
-    let port: u16 = port_str.parse().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("bad port {port_str}: {e}"),
-        )
-    })?;
+    let (ip_str, port_str) = group
+        .rsplit_once(':')
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("SIM_UDP_GROUP missing port: {group}")))?;
+    let ip: Ipv4Addr = ip_str
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad multicast ip {ip_str}: {e}")))?;
+    let port: u16 = port_str
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad port {port_str}: {e}")))?;
     if !ip.is_multicast() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -80,8 +69,7 @@ fn listen_feed(group: &str) -> io::Result<()> {
         ));
     }
 
-    let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
-    let socket = UdpSocket::bind(bind_addr)?;
+    let socket = bind_multicast_socket(port)?;
     socket.join_multicast_v4(&ip, &Ipv4Addr::UNSPECIFIED)?;
     eprintln!("[example-bot] joined multicast {ip}:{port}");
 
@@ -93,10 +81,7 @@ fn listen_feed(group: &str) -> io::Result<()> {
         let (n, _from) = socket.recv_from(&mut buf)?;
         received += 1;
         if n < 24 {
-            writeln!(
-                out,
-                "[example-bot] tick #{received}: short packet ({n} bytes)"
-            )?;
+            writeln!(out, "[example-bot] tick #{received}: short packet ({n} bytes)")?;
             continue;
         }
         let pair_id = u64::from_le_bytes(buf[0..8].try_into().unwrap());
@@ -123,21 +108,30 @@ fn http_request(addr: &str, method: &str, path: &str) -> io::Result<Vec<u8>> {
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw)?;
 
-    let header_end = find(&raw, b"\r\n\r\n")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no \\r\\n\\r\\n in response"))?;
+    let header_end = find(&raw, b"\r\n\r\n").ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no \\r\\n\\r\\n in response"))?;
     let status_end = find(&raw, b"\r\n").unwrap_or(0);
     let status = std::str::from_utf8(&raw[..status_end]).unwrap_or("(non-utf8 status)");
     if !status.contains(" 200 ") {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("bad HTTP status: {status}"),
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, format!("bad HTTP status: {status}")));
     }
     Ok(raw[header_end + 4..].to_vec())
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Create a UDP socket bound to `0.0.0.0:port` with SO_REUSEADDR + SO_REUSEPORT
+/// set before bind, so multiple bots can share the multicast port in the same
+/// network namespace.
+fn bind_multicast_socket(port: u16) -> io::Result<UdpSocket> {
+    let fd = socket(AddressFamily::Inet, SockType::Datagram, SockFlag::empty(), SockProtocol::Udp)?;
+    let udp = UdpSocket::from(fd);
+    setsockopt(&udp, sockopt::ReuseAddr, &true)?;
+    setsockopt(&udp, sockopt::ReusePort, &true)?;
+    let addr = SockaddrIn::new(0, 0, 0, 0, port);
+    bind(std::os::fd::AsRawFd::as_raw_fd(&udp), &addr)?;
+    Ok(udp)
 }
 
 struct Config {
@@ -150,8 +144,7 @@ impl Config {
     fn parse() -> Self {
         let sim_http_addr = env::var("SIM_HTTP_ADDR").expect("SIM_HTTP_ADDR must be set");
         let sim_udp_group = env::var("SIM_UDP_GROUP").expect("SIM_UDP_GROUP must be set");
-        let sim_submission_addr =
-            env::var("SIM_SUBMISSION_ADDR").expect("SIM_SUBMISSION_ADDR must be set");
+        let sim_submission_addr = env::var("SIM_SUBMISSION_ADDR").expect("SIM_SUBMISSION_ADDR must be set");
         Self {
             sim_http_addr,
             sim_submission_addr,
