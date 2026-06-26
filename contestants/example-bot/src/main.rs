@@ -5,9 +5,6 @@ use std::process::ExitCode;
 
 mod market;
 
-/// Print every Nth received UDP tick.
-const SAMPLE_EVERY: u64 = 10000;
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -86,7 +83,7 @@ fn listen_feed(group: &str) -> io::Result<()> {
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let socket = UdpSocket::bind(bind_addr)?;
     socket.join_multicast_v4(&ip, &Ipv4Addr::UNSPECIFIED)?;
-    eprintln!("[example-bot] joined multicast {ip}:{port}, sampling 1/{SAMPLE_EVERY}");
+    eprintln!("[example-bot] joined multicast {ip}:{port}");
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -95,9 +92,6 @@ fn listen_feed(group: &str) -> io::Result<()> {
     loop {
         let (n, _from) = socket.recv_from(&mut buf)?;
         received += 1;
-        if received % SAMPLE_EVERY != 0 {
-            continue;
-        }
         if n < 24 {
             writeln!(
                 out,
@@ -105,7 +99,6 @@ fn listen_feed(group: &str) -> io::Result<()> {
             )?;
             continue;
         }
-        // PriceUpdate layout: pair_id (u64 LE), price (u64 LE), volume (u64 LE).
         let pair_id = u64::from_le_bytes(buf[0..8].try_into().unwrap());
         let price = u64::from_le_bytes(buf[8..16].try_into().unwrap());
         let volume = u64::from_le_bytes(buf[16..24].try_into().unwrap());

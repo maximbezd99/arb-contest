@@ -9,9 +9,9 @@ use crate::protocol::market::{Market, Token, TokenPair};
 
 /// Generate a deterministic price-update feed on top of an initial [`Market`].
 ///
-/// Generates exactly `cfg.arb_count` mispricings. Time advances in 1 ms
-/// windows; each window contributes `cfg.updates_per_ms` mispricings
-/// scattered at random offsets in `[0, 1000)` µs. Each mispricing perturbs
+/// Generates exactly `cfg.arb_count` mispricings. Time advances in 1 sec
+/// windows; each window contributes `cfg.updates_per_sec` mispricings
+/// scattered at random offsets in `[0, 1_000_000)` µs. Each mispricing perturbs
 /// one token's USD price, emits a "main" update on a random adjacent pair
 /// at the mispricing's instant, and schedules a rebalancing update on every
 /// other adjacent pair at `mispricing_time + uniform(rebalance_delay_us)`.
@@ -72,19 +72,19 @@ pub fn generate_feed(market: &Market, cfg: &GenerationConfig, seed: u64) -> Resu
 
     // --- Pass 1: schedule events. ---
     let mut events: Vec<Event> = Vec::with_capacity(cfg.arb_count as usize * 32);
-    let arbs_per_window = cfg.updates_per_ms as usize;
+    let arbs_per_window = cfg.updates_per_sec as usize;
     let total_arbs = cfg.arb_count as usize;
     let mut arbs_emitted = 0usize;
     let mut window_idx: u64 = 0;
     'outer: while arbs_emitted < total_arbs {
-        let mut offsets: Vec<u64> = (0..arbs_per_window).map(|_| rng.gen_range(0..1_000)).collect();
+        let mut offsets: Vec<u64> = (0..arbs_per_window).map(|_| rng.gen_range(0..1_000_000)).collect();
         offsets.sort_unstable();
 
         for offset in offsets {
             if arbs_emitted >= total_arbs {
                 break 'outer;
             }
-            let t_m = window_idx * 1_000 + offset;
+            let t_m = window_idx * 1_000_000 + offset;
             let token = rng.gen_range(1..market.tokens.len() as u64) as usize;
 
             if adj[token].is_empty() {
@@ -524,7 +524,10 @@ mod tests {
         }
 
         let t_main = abs[0];
-        assert!(t_main < 1_000, "main should fire within the first 1 ms window, got {t_main} µs");
+        assert!(
+            t_main < 1_000_000,
+            "main should fire within the first 1 sec window, got {t_main} µs"
+        );
         for &t_rebalance in &abs[1..] {
             let off = t_rebalance - t_main;
             assert!(

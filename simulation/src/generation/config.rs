@@ -1,10 +1,11 @@
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 
-const CONFIG_JSON: &str = include_str!("../../config.json");
+const CONFIG_PATH: &str = "config.json";
 
 pub fn load_config() -> Result<GenerationConfig> {
-    serde_json::from_str(CONFIG_JSON).context("parsing embedded simulation/config.json")
+    let raw = std::fs::read_to_string(CONFIG_PATH).with_context(|| format!("reading config from {CONFIG_PATH}"))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing config at {CONFIG_PATH}"))
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -36,8 +37,8 @@ pub struct GenerationConfig {
     pub variable_fee_bps: u64,
     /// Number of original mispricings (arbs) to generate over the simulation.
     pub arb_count: u64,
-    /// Number of new mispricings per 1 ms window.
-    pub updates_per_ms: u64,
+    /// Number of new mispricings per 1 sec window.
+    pub updates_per_sec: u64,
     /// Per-pair delay range (µs) between a mispricing and its rebalancing update on a connected pair.
     pub rebalance_delay_us: Range,
     /// Magnitude of per-mispricing perturbation applied to a token's USD price, in basis points (1 bps = 0.01%). Sign is random.
@@ -79,15 +80,11 @@ impl GenerationConfig {
              (lower volume_usd.max, raise price_usd.min, or reduce decimals)"
         );
 
-        ensure!(self.updates_per_ms >= 1, "updates_per_ms must be >= 1");
+        ensure!(self.updates_per_sec >= 1, "updates_per_sec must be >= 1");
         ensure!(self.rebalance_delay_us.min >= 1, "rebalance_delay_us.min must be >= 1");
         ensure!(
             self.rebalance_delay_us.min <= self.rebalance_delay_us.max,
             "rebalance_delay_us: min > max"
-        );
-        ensure!(
-            self.rebalance_delay_us.max < 1_000,
-            "rebalance_delay_us.max must be < 1000 (tail must close within 1 ms of mispricing)"
         );
         ensure!(self.price_perturb_bps.min >= 1, "price_perturb_bps.min must be >= 1");
         ensure!(
@@ -148,19 +145,11 @@ mod tests {
     }
 
     #[test]
-    fn zero_updates_per_ms_rejected() {
+    fn zero_updates_per_sec_rejected() {
         let mut c = load_config().unwrap();
-        c.updates_per_ms = 0;
+        c.updates_per_sec = 0;
         let err = c.sanity_check().unwrap_err();
-        assert!(err.to_string().contains("updates_per_ms"), "{err}");
-    }
-
-    #[test]
-    fn rebalance_delay_max_too_large_rejected() {
-        let mut c = load_config().unwrap();
-        c.rebalance_delay_us.max = 1_000;
-        let err = c.sanity_check().unwrap_err();
-        assert!(err.to_string().contains("rebalance_delay_us.max"), "{err}");
+        assert!(err.to_string().contains("updates_per_sec"), "{err}");
     }
 
     #[test]

@@ -60,7 +60,7 @@ See `contestants/example-bot/src/main.rs` for a working reference implementation
 > Submission works only on networking level. Logic for it is not implemented on simulation side yet.
 
 ## Code reference
-You can adjust `simulation/config.json` (you can see doc for it in `simulation/stc/generation/config.rs`). For lower volume you should probably tweak `updates_per_ms`. This value controls the amount of "original" mispricings which happen every ms, number of total updates per ms will be a lot higher (depending on number of tokens and pairs).
+You can adjust `simulation/config.json` (you can see doc for it in `simulation/stc/generation/config.rs`). For lower volume you should probably tweak `updates_per_sec`. This value controls the amount of "original" mispricings which happen every second, number of total updates per second will be a lot higher (depending on number of tokens and pairs).
 
 Files with structs related to simultion <-> bot communication you can find in `simulation/src/protocol`. Reference `contestants/example-bot` to see how binary `/market` data can be parsed. This endpoint exists (in addition to `/market/json`) because not all languages have built-in json support.
 
