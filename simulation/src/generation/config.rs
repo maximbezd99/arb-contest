@@ -58,28 +58,15 @@ impl GenerationConfig {
     ///   - Feed-generation params are inside the ranges the generator assumes.
     pub fn sanity_check(&self) -> Result<()> {
         ensure!(self.price_usd.min > 0, "price_usd.min must be > 0");
-        ensure!(
-            self.decimals.min <= self.decimals.max,
-            "decimals: min > max"
-        );
-        ensure!(
-            self.price_usd.min <= self.price_usd.max,
-            "price_usd: min > max"
-        );
-        ensure!(
-            self.volume_usd.min <= self.volume_usd.max,
-            "volume_usd: min > max"
-        );
+        ensure!(self.decimals.min <= self.decimals.max, "decimals: min > max");
+        ensure!(self.price_usd.min <= self.price_usd.max, "price_usd: min > max");
+        ensure!(self.volume_usd.min <= self.volume_usd.max, "volume_usd: min > max");
 
         let max_decimals = self.decimals.max.max(self.usd_decimals);
         let min_quote_price_usd = self.price_usd.min.min(1); // USD always $1
 
-        let exp: u32 = (2 * max_decimals)
-            .try_into()
-            .context("2 × max_decimals overflows u32")?;
-        let factor = 10u128
-            .checked_pow(exp)
-            .with_context(|| format!("10^{exp} overflows u128"))?;
+        let exp: u32 = (2 * max_decimals).try_into().context("2 × max_decimals overflows u32")?;
+        let factor = 10u128.checked_pow(exp).with_context(|| format!("10^{exp} overflows u128"))?;
         let numerator = u128::from(self.volume_usd.max)
             .checked_mul(factor)
             .with_context(|| format!("volume_usd.max × 10^{exp} overflows u128"))?;
@@ -93,10 +80,7 @@ impl GenerationConfig {
         );
 
         ensure!(self.updates_per_ms >= 1, "updates_per_ms must be >= 1");
-        ensure!(
-            self.rebalance_delay_us.min >= 1,
-            "rebalance_delay_us.min must be >= 1"
-        );
+        ensure!(self.rebalance_delay_us.min >= 1, "rebalance_delay_us.min must be >= 1");
         ensure!(
             self.rebalance_delay_us.min <= self.rebalance_delay_us.max,
             "rebalance_delay_us: min > max"
@@ -105,10 +89,7 @@ impl GenerationConfig {
             self.rebalance_delay_us.max < 1_000,
             "rebalance_delay_us.max must be < 1000 (tail must close within 1 ms of mispricing)"
         );
-        ensure!(
-            self.price_perturb_bps.min >= 1,
-            "price_perturb_bps.min must be >= 1"
-        );
+        ensure!(self.price_perturb_bps.min >= 1, "price_perturb_bps.min must be >= 1");
         ensure!(
             self.price_perturb_bps.min <= self.price_perturb_bps.max,
             "price_perturb_bps: min > max"
@@ -117,10 +98,7 @@ impl GenerationConfig {
             self.price_perturb_bps.max < 10_000,
             "price_perturb_bps.max must be < 10000 (delta < 100%)"
         );
-        ensure!(
-            self.volume_perturb_bps.min >= 1,
-            "volume_perturb_bps.min must be >= 1"
-        );
+        ensure!(self.volume_perturb_bps.min >= 1, "volume_perturb_bps.min must be >= 1");
         ensure!(
             self.volume_perturb_bps.min <= self.volume_perturb_bps.max,
             "volume_perturb_bps: min > max"
@@ -148,10 +126,7 @@ mod tests {
         let mut c = load_config().unwrap();
         c.price_usd.min = 0;
         let err = c.sanity_check().unwrap_err();
-        assert!(
-            err.to_string().contains("price_usd.min must be > 0"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("price_usd.min must be > 0"), "{err}");
     }
 
     #[test]

@@ -8,12 +8,13 @@ Each contestant name must match a service in docker-compose.yml.
 Env vars (override any to change behavior; defaults applied here, not in the
 compose file, so docker still demands them):
   - RUST_LOG                  (default "info")
-  - SIM_HTTP_BIND             (default "0.0.0.0:9003")  simulation HTTP listener
+  - SIM_HTTP_BIND             (default "0.0.0.0:9003")     simulation HTTP listener
   - SIM_UDP_TARGET            (default "239.42.0.1:9001")  simulation UDP destination
-  - SIM_TCP_BIND              (default "0.0.0.0:9002")  simulation submission listener
-  - SIM_HTTP_ADDR             (default "127.0.0.1:9003")  what contestants connect to
+  - SIM_TCP_BIND              (default "0.0.0.0:9002")     simulation submission listener
+  - SIM_HTTP_ADDR             (default "127.0.0.1:9003")   what contestants connect to
   - SIM_UDP_GROUP             (default "239.42.0.1:9001")  multicast group contestants join
-  - SIM_SUBMISSION_ADDR       (default "127.0.0.1:9002")  where contestants send submissions
+  - SIM_SUBMISSION_ADDR       (default "127.0.0.1:9002")   where contestants send submissions
+  - SIM_INITIAL_BALANCE_USD   (default "100")              starting balance per contestant, in whole USD
 
 SIM_EXPECTED_CONTESTANTS is set automatically from the number of contestants
 passed on the command line.
@@ -41,6 +42,7 @@ DEFAULTS = {
     "SIM_HTTP_ADDR": "127.0.0.1:9003",
     "SIM_UDP_GROUP": "239.42.0.1:9001",
     "SIM_SUBMISSION_ADDR": "127.0.0.1:9002",
+    "SIM_INITIAL_BALANCE_USD": "100",
 }
 
 # Simulation owns 0-3 (set statically in compose). Contestants are assigned

@@ -16,12 +16,7 @@ pub struct UdpSendOutcome {
     pub send_errors: u64,
 }
 
-pub fn spawn(
-    core_id: CoreId,
-    bind: SocketAddr,
-    target: SocketAddr,
-    rx: Receiver<PriceUpdate>,
-) -> Result<JoinHandle<UdpSendOutcome>> {
+pub fn spawn(core_id: CoreId, bind: SocketAddr, target: SocketAddr, rx: Receiver<PriceUpdate>) -> Result<JoinHandle<UdpSendOutcome>> {
     let udp_socket = UdpSocket::bind(bind)?;
     if let IpAddr::V4(_) = target.ip() {
         udp_socket.set_multicast_ttl_v4(1)?;

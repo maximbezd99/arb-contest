@@ -23,4 +23,7 @@ pub struct SimConfig {
     /// Master seed.
     #[arg(long, env = "SEED", default_value = "0")]
     pub seed: u64,
+    /// Initial balance handed to each contestant, in whole USD.
+    #[arg(long, env = "SIM_INITIAL_BALANCE_USD", default_value = "0")]
+    pub initial_balance_usd: i64,
 }

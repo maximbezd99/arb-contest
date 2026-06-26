@@ -1,27 +1,42 @@
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{Arc, Mutex},
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
 use anyhow::Result;
 use core_affinity::CoreId;
 use crossbeam_channel::Sender;
-use tokio::io::AsyncReadExt;
-use tokio::sync::watch;
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    sync::{mpsc, oneshot, watch},
+    task::{AbortHandle, JoinSet},
+};
 use tracing::{info, warn};
 
-use crate::cores;
-use crate::protocol::submission::RouteSubmission;
+use crate::{
+    cores,
+    protocol::submission::{DeserializeError, RouteSubmission, SubmissionResponse, MAX_SUBMISSION_SIZE},
+};
 
 const SUBMISSION_READ_BUF: usize = 4096;
+const RESPONSE_CHANNEL_CAP: usize = 1024;
+
+// The reader's accumulator must be large enough to hold one full submission
+const _: () = assert!(SUBMISSION_READ_BUF >= MAX_SUBMISSION_SIZE);
 
 #[derive(Debug)]
 pub struct ContestantSubmission {
     pub contestant_id: u64,
     pub submission: RouteSubmission,
+    /// Fired exactly once when the runloop finishes evaluating this
+    /// submission. If the receiver was already dropped (writer backpressure or
+    /// connection closed), the send returns `Err` and the runloop counts it.
+    pub response_tx: oneshot::Sender<SubmissionResponse>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -114,16 +129,24 @@ async fn run(
                     }
 
                     streams_accepted.fetch_add(1, Ordering::Relaxed);
+
+                    let (read_half, write_half) = stream.into_split();
+                    let (resp_tx, resp_rx) = mpsc::channel::<oneshot::Receiver<SubmissionResponse>>(RESPONSE_CHANNEL_CAP,);
+
+                    tokio::spawn(write_stream(write_half, resp_rx));
+
                     let handle = tasks.spawn(read_stream(
-                        stream,
+                        read_half,
                         id,
                         sub_tx.clone(),
+                        resp_tx,
                         streams_disconnected.clone(),
                         bytes_read.clone(),
                         submissions_forwarded.clone(),
                         submissions_dropped_bad.clone(),
                         shutdown_tx.subscribe(),
                     ));
+
                     active.insert(id, handle);
                 }
                 Err(e) => warn!(error = %e, "submission accept failed"),
@@ -143,17 +166,11 @@ async fn run(
     }
 }
 
-async fn read_handshake(
-    stream: &mut tokio::net::TcpStream,
-    registered_ids: &Arc<Mutex<HashSet<u64>>>,
-) -> Result<u64> {
+async fn read_handshake(stream: &mut tokio::net::TcpStream, registered_ids: &Arc<Mutex<HashSet<u64>>>) -> Result<u64> {
     let mut buf = [0u8; 8];
     stream.read_exact(&mut buf).await?;
     let id = u64::from_le_bytes(buf);
-    let known = registered_ids
-        .lock()
-        .expect("can't acquire registered_ids mutex")
-        .contains(&id);
+    let known = registered_ids.lock().expect("can't acquire registered_ids mutex").contains(&id);
     if !known {
         anyhow::bail!("contestant id {id} not registered");
     }
@@ -162,52 +179,78 @@ async fn read_handshake(
 
 #[allow(clippy::too_many_arguments)]
 async fn read_stream(
-    mut stream: tokio::net::TcpStream,
+    mut read_half: OwnedReadHalf,
     contestant_id: u64,
     sub_tx: Sender<ContestantSubmission>,
+    resp_tx: mpsc::Sender<oneshot::Receiver<SubmissionResponse>>,
     streams_disconnected: Arc<AtomicU64>,
     bytes_read: Arc<AtomicU64>,
     submissions_forwarded: Arc<AtomicU64>,
     submissions_dropped_bad: Arc<AtomicU64>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let mut buf = [0u8; SUBMISSION_READ_BUF];
+    let mut acc = [0u8; SUBMISSION_READ_BUF];
+    let mut len = 0usize;
     loop {
         tokio::select! {
             _ = shutdown_rx.changed() => return,
-            res = stream.read(&mut buf) => match res {
+            res = read_half.read(&mut acc[len..]) => match res {
                 Ok(0) => {
                     streams_disconnected.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
                 Ok(n) => {
                     bytes_read.fetch_add(n as u64, Ordering::Relaxed);
-                    let submission = match RouteSubmission::deserialize(&buf[..n]) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            warn!(
-                                contestant_id,
-                                error = %e,
-                                bytes = n,
-                                "failed to parse submission; dropping",
-                            );
-                            submissions_dropped_bad.fetch_add(1, Ordering::Relaxed);
-                            continue;
+                    len += n;
+
+                    let mut cursor = 0;
+                    loop {
+                        match RouteSubmission::deserialize(&acc[cursor..len]) {
+                            Ok((submission, consumed)) => {
+                                let (response_tx, response_rx) = oneshot::channel();
+                                // If the writer queue is full, drop the receiver
+                                // immediately. The runloop's send will then fail
+                                // and bump its own dropped-response counter.
+                                let _ = resp_tx.try_send(response_rx);
+                                let msg = ContestantSubmission {
+                                    contestant_id,
+                                    submission,
+                                    response_tx,
+                                };
+                                if sub_tx.send(msg).is_err() {
+                                    return;
+                                }
+                                submissions_forwarded.fetch_add(1, Ordering::Relaxed);
+                                cursor += consumed;
+                            }
+                            Err(DeserializeError::Incomplete) => break,
+                            Err(e) => {
+                                warn!(contestant_id, error = %e, "bad submission framing; dropping stream");
+                                submissions_dropped_bad.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
                         }
-                    };
-                    let msg = ContestantSubmission {
-                        contestant_id,
-                        submission,
-                    };
-                    if sub_tx.send(msg).is_err() {
-                        return;
                     }
-                    submissions_forwarded.fetch_add(1, Ordering::Relaxed);
+
+                    if cursor > 0 {
+                        acc.copy_within(cursor..len, 0);
+                        len -= cursor;
+                    }
                 }
                 Err(_) => {
                     streams_disconnected.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
+            }
+        }
+    }
+}
+
+async fn write_stream(mut write_half: OwnedWriteHalf, mut resp_rx: mpsc::Receiver<oneshot::Receiver<SubmissionResponse>>) {
+    while let Some(rx) = resp_rx.recv().await {
+        if let Ok(resp) = rx.await {
+            if write_half.write_all(resp.as_bytes()).await.is_err() {
+                return;
             }
         }
     }

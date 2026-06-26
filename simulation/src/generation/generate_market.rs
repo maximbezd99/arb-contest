@@ -24,10 +24,7 @@ use crate::protocol::market::{Fee, Market, Token, TokenPair};
 /// USD prices — so the market starts in equilibrium (no arbs at t=0).
 /// Volumes are independent samples from `volume_usd` per pair.
 pub fn generate_market(cfg: &GenerationConfig, seed: u64) -> Result<Market> {
-    ensure!(
-        cfg.token_count >= 2,
-        "token_count must be at least 2 (USD + 1)"
-    );
+    ensure!(cfg.token_count >= 2, "token_count must be at least 2 (USD + 1)");
     let non_usd = cfg.token_count - 1;
     let max_cross = non_usd.saturating_mul(non_usd - 1) / 2;
     ensure!(
@@ -170,19 +167,10 @@ mod tests {
         // first (token_count - 1) pairs are USD pairs (quote = 0)
         for i in 0..(cfg.token_count - 1) as usize {
             assert_eq!(market.pairs[i].quote, 0, "pair {i} should be USD quote");
-            assert_eq!(
-                market.pairs[i].base,
-                (i as u64) + 1,
-                "pair {i} base mismatch"
-            );
+            assert_eq!(market.pairs[i].base, (i as u64) + 1, "pair {i} base mismatch");
         }
         // every non-USD token is covered
-        let usd_bases: std::collections::HashSet<u64> = market
-            .pairs
-            .iter()
-            .take((cfg.token_count - 1) as usize)
-            .map(|p| p.base)
-            .collect();
+        let usd_bases: std::collections::HashSet<u64> = market.pairs.iter().take((cfg.token_count - 1) as usize).map(|p| p.base).collect();
         assert_eq!(usd_bases.len() as u64, cfg.token_count - 1);
     }
 
@@ -199,11 +187,7 @@ mod tests {
         }
         for p in market.pairs.iter().skip(usd_pair_count) {
             let quote_d = market.tokens[p.quote as usize].decimals;
-            let expected = cross_pair_price(
-                pu_atomic[p.base as usize],
-                pu_atomic[p.quote as usize],
-                quote_d,
-            );
+            let expected = cross_pair_price(pu_atomic[p.base as usize], pu_atomic[p.quote as usize], quote_d);
             assert_eq!(p.price, expected, "cross pair {:?} price mismatch", p.id);
         }
     }
@@ -216,11 +200,7 @@ mod tests {
         let lo = cfg.price_usd.min * scale;
         let hi = cfg.price_usd.max * scale;
         for p in market.pairs.iter().take((cfg.token_count - 1) as usize) {
-            assert!(
-                p.price >= lo && p.price <= hi,
-                "USD pair price {} out of [{lo}, {hi}]",
-                p.price,
-            );
+            assert!(p.price >= lo && p.price <= hi, "USD pair price {} out of [{lo}, {hi}]", p.price,);
         }
     }
 

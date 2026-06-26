@@ -59,11 +59,7 @@ impl HttpServerState {
     }
 }
 
-pub fn spawn(
-    core_id: CoreId,
-    bind: SocketAddr,
-    state: HttpServerState,
-) -> thread::JoinHandle<Result<()>> {
+pub fn spawn(core_id: CoreId, bind: SocketAddr, state: HttpServerState) -> thread::JoinHandle<Result<()>> {
     thread::Builder::new()
         .name("http-server".into())
         .spawn(move || {
@@ -89,9 +85,7 @@ async fn server(bind: SocketAddr, state: HttpServerState) -> Result<()> {
         .route("/:id/ready", post(post_ready))
         .with_state(state);
 
-    let listener = TcpListener::bind(bind)
-        .await
-        .with_context(|| format!("bind http {bind}"))?;
+    let listener = TcpListener::bind(bind).await.with_context(|| format!("bind http {bind}"))?;
     info!(local = %listener.local_addr()?, "http listener bound");
 
     axum::serve(listener, app).await?;
@@ -132,11 +126,7 @@ async fn post_register(State(state): State<HttpServerState>) -> impl IntoRespons
         .expect("can't acquire contestant_id_rng mutex")
         .next_u64();
 
-    state
-        .registered_ids
-        .lock()
-        .expect("can't acquire registered_ids mutex")
-        .insert(id);
+    state.registered_ids.lock().expect("can't acquire registered_ids mutex").insert(id);
 
     info!(contestant_id = id, "registered new contestant");
 
@@ -147,10 +137,7 @@ async fn post_register(State(state): State<HttpServerState>) -> impl IntoRespons
     response.into_response()
 }
 
-async fn post_ready(
-    Path(id): Path<u64>,
-    State(state): State<HttpServerState>,
-) -> impl IntoResponse {
+async fn post_ready(Path(id): Path<u64>, State(state): State<HttpServerState>) -> impl IntoResponse {
     if state.configuration_complete.load(Ordering::Relaxed) {
         return (StatusCode::SERVICE_UNAVAILABLE).into_response();
     }
@@ -164,11 +151,7 @@ async fn post_ready(
         return (StatusCode::FORBIDDEN, "id not registered").into_response();
     }
 
-    state
-        .ready_ids
-        .lock()
-        .expect("can't acquire ready_ids mutex")
-        .insert(id);
+    state.ready_ids.lock().expect("can't acquire ready_ids mutex").insert(id);
 
     info!(contestant_id = id, "contestant ready");
 

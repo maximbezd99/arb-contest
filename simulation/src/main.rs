@@ -26,7 +26,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     config::SimConfig,
-    engine::runloop,
+    engine::{contestant::Contestant, runloop},
     generation::{
         generate_feed::{feed_stats, generate_feed},
         generate_market::generate_market,
@@ -38,9 +38,7 @@ use crate::{
 const BOOT_WAIT: Duration = Duration::from_secs(30);
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
     let cfg = SimConfig::parse();
     info!(?cfg, "starting simulation server");
@@ -65,11 +63,7 @@ fn main() -> Result<()> {
     info!(?gen_cfg, "generation config loaded and validated");
 
     let market = generate_market(&gen_cfg, market_seed)?;
-    info!(
-        tokens = market.tokens.len(),
-        pairs = market.pairs.len(),
-        "market generated"
-    );
+    info!(tokens = market.tokens.len(), pairs = market.pairs.len(), "market generated");
 
     let feed = generate_feed(&market, &gen_cfg, feed_seed)?;
     let stats = feed_stats(&feed);
@@ -99,9 +93,7 @@ fn main() -> Result<()> {
     )?;
 
     let market_bytes = Bytes::from(serialize_market(&market));
-    let market_json_bytes =
-        Bytes::from(serde_json::to_vec(&market).expect("serialize market to json"));
-    drop(market);
+    let market_json_bytes = Bytes::from(serde_json::to_vec(&market).expect("serialize market to json"));
 
     let configuration_complete = Arc::new(AtomicBool::new(false));
     let http_state = http::HttpServerState::new(
@@ -129,10 +121,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        let current_contestants = ready_ids
-            .lock()
-            .expect("can't acquire ready_ids lock in main")
-            .len();
+        let current_contestants = ready_ids.lock().expect("can't acquire ready_ids lock in main").len();
 
         if current_contestants > cfg.expected_contestants {
             panic!("More contestants than expected");
@@ -147,21 +136,36 @@ fn main() -> Result<()> {
 
     configuration_complete.store(true, Ordering::Relaxed);
 
+    let contestants: std::collections::HashMap<u64, Contestant> = ready_ids
+        .lock()
+        .expect("can't acquire ready_ids lock to seed contestants")
+        .iter()
+        .map(|&id| {
+            (
+                id,
+                Contestant::new_with_decimals(id, cfg.initial_balance_usd, gen_cfg.usd_decimals as i64),
+            )
+        })
+        .collect();
+
     let runloop_handle = runloop::spawn(
         cores.runloop,
         feed,
+        market,
+        contestants,
         udp_tx.clone(),
         tcp_rx,
         shutdown_flag.clone(),
     );
 
-    let outcome = runloop_handle
-        .join()
-        .map_err(|_| anyhow!("fail to join runloop thread"))?;
+    let outcome = runloop_handle.join().map_err(|_| anyhow!("fail to join runloop thread"))?;
     info!(
         dispatched = outcome.dispatched,
         udp_dispatch_errors = outcome.udp_dispatch_errors,
         submissions_received = outcome.submissions_received,
+        submissions_ok = outcome.submissions_ok,
+        submissions_fail = outcome.submissions_fail,
+        responses_dropped = outcome.responses_dropped,
         final_overshoot_ns = outcome.final_overshoot_ns,
         late_ticks = outcome.late_ticks,
         "engine thread finished:",
@@ -178,9 +182,7 @@ fn main() -> Result<()> {
     let drain_started = std::time::Instant::now();
     drop(udp_tx);
 
-    let udp_sender_outcome = udp_handle
-        .join()
-        .map_err(|_| anyhow!("fail to join udp thread"))?;
+    let udp_sender_outcome = udp_handle.join().map_err(|_| anyhow!("fail to join udp thread"))?;
     info!(
         sent = udp_sender_outcome.sent,
         send_errors = udp_sender_outcome.send_errors,
@@ -188,9 +190,7 @@ fn main() -> Result<()> {
         "udp thread finished:",
     );
 
-    let submissions_outcome = tcp_handle
-        .join()
-        .map_err(|_| anyhow!("fail to join submissions thread"))?;
+    let submissions_outcome = tcp_handle.join().map_err(|_| anyhow!("fail to join submissions thread"))?;
 
     info!(
         streams_accepted = submissions_outcome.streams_accepted,

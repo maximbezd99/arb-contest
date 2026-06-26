@@ -77,9 +77,7 @@ pub fn generate_feed(market: &Market, cfg: &GenerationConfig, seed: u64) -> Resu
     let mut arbs_emitted = 0usize;
     let mut window_idx: u64 = 0;
     'outer: while arbs_emitted < total_arbs {
-        let mut offsets: Vec<u64> = (0..arbs_per_window)
-            .map(|_| rng.gen_range(0..1_000))
-            .collect();
+        let mut offsets: Vec<u64> = (0..arbs_per_window).map(|_| rng.gen_range(0..1_000)).collect();
         offsets.sort_unstable();
 
         for offset in offsets {
@@ -111,8 +109,7 @@ pub fn generate_feed(market: &Market, cfg: &GenerationConfig, seed: u64) -> Resu
                 if i == main_pos {
                     continue;
                 }
-                let t_emit =
-                    t_m + rng.gen_range(cfg.rebalance_delay_us.min..=cfg.rebalance_delay_us.max);
+                let t_emit = t_m + rng.gen_range(cfg.rebalance_delay_us.min..=cfg.rebalance_delay_us.max);
                 events.push(Event {
                     t: t_emit,
                     kind: EventKind::Rebalance { pair_idx },
@@ -135,11 +132,7 @@ pub fn generate_feed(market: &Market, cfg: &GenerationConfig, seed: u64) -> Resu
                 sign_positive,
                 main_pair_idx,
             } => {
-                let factor = if sign_positive {
-                    10_000 + delta_bps
-                } else {
-                    10_000 - delta_bps
-                };
+                let factor = if sign_positive { 10_000 + delta_bps } else { 10_000 - delta_bps };
                 let new_pu = (pu[token] * factor / 10_000).clamp(pu_min, pu_max);
                 pu[token] = new_pu;
                 (main_pair_idx, true)
@@ -203,13 +196,8 @@ pub fn generate_feed(market: &Market, cfg: &GenerationConfig, seed: u64) -> Resu
         let pair_idx = tick.pair_idx;
         let delta_bps = rng.gen_range(cfg.volume_perturb_bps.min..=cfg.volume_perturb_bps.max);
         let sign_positive = rng.gen_bool(0.5);
-        let factor = if sign_positive {
-            10_000 + delta_bps
-        } else {
-            10_000 - delta_bps
-        };
-        let new_vol = (current_volume[pair_idx] * factor / 10_000)
-            .clamp(volume_min[pair_idx], volume_max[pair_idx]);
+        let factor = if sign_positive { 10_000 + delta_bps } else { 10_000 - delta_bps };
+        let new_vol = (current_volume[pair_idx] * factor / 10_000).clamp(volume_min[pair_idx], volume_max[pair_idx]);
         current_volume[pair_idx] = new_vol;
         tick.volume = new_vol;
     }
@@ -302,14 +290,11 @@ pub fn feed_stats(feed: &[FeedTick]) -> FeedStats {
 
     let mut absolute: u64 = 0;
     let mut per_ms_counts: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
-    let mut per_pair_counts: std::collections::HashMap<u64, usize> =
-        std::collections::HashMap::new();
+    let mut per_pair_counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for tick in feed {
         absolute += tick.delay_us;
         *per_ms_counts.entry(absolute / 1_000).or_default() += 1;
-        *per_pair_counts
-            .entry(tick.update.token_pair_id)
-            .or_default() += 1;
+        *per_pair_counts.entry(tick.update.token_pair_id).or_default() += 1;
     }
 
     let duration_us = absolute;
@@ -369,9 +354,7 @@ mod tests {
         let feed = generate_feed(&market, &cfg, 7).unwrap();
         let mut t: u64 = 0;
         for tick in &feed {
-            t = t
-                .checked_add(tick.delay_us)
-                .expect("absolute time overflow");
+            t = t.checked_add(tick.delay_us).expect("absolute time overflow");
             let _ = t;
         }
     }
@@ -387,12 +370,7 @@ mod tests {
         let feed = generate_feed(&market, &cfg, 11).unwrap();
 
         let mut live: Vec<u64> = market.pairs.iter().map(|p| p.price).collect();
-        let id_to_idx: std::collections::HashMap<u64, usize> = market
-            .pairs
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.id, i))
-            .collect();
+        let id_to_idx: std::collections::HashMap<u64, usize> = market.pairs.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
         for tick in &feed {
             let idx = id_to_idx[&tick.update.token_pair_id];
             live[idx] = tick.update.price;
@@ -406,11 +384,7 @@ mod tests {
         }
 
         for (i, p) in market.pairs.iter().enumerate().skip(usd_pair_count) {
-            let expected = cross_pair_price(
-                pu[p.base as usize],
-                pu[p.quote as usize],
-                market.tokens[p.quote as usize].decimals,
-            );
+            let expected = cross_pair_price(pu[p.base as usize], pu[p.quote as usize], market.tokens[p.quote as usize].decimals);
             assert_eq!(
                 live[i], expected,
                 "cross pair {} not in equilibrium: live={} expected={}",
@@ -431,12 +405,7 @@ mod tests {
         let feed = generate_feed(&market, &cfg, 13).unwrap();
 
         let scale = pow10(cfg.usd_decimals);
-        let usd_pair_ids: std::collections::HashSet<u64> = market
-            .pairs
-            .iter()
-            .filter(|p| p.quote == 0)
-            .map(|p| p.id)
-            .collect();
+        let usd_pair_ids: std::collections::HashSet<u64> = market.pairs.iter().filter(|p| p.quote == 0).map(|p| p.id).collect();
         let lo = cfg.price_usd.min * scale;
         let hi = cfg.price_usd.max * scale;
         for tick in &feed {
@@ -465,13 +434,11 @@ mod tests {
         let a = generate_feed(&market, &cfg, 1).unwrap();
         let b = generate_feed(&market, &cfg, 2).unwrap();
         // At least some tick must differ in price or pair id.
-        let any_diff = a.iter().zip(b.iter()).any(|(x, y)| {
-            x.update.price != y.update.price || x.update.token_pair_id != y.update.token_pair_id
-        });
-        assert!(
-            any_diff,
-            "feeds for distinct seeds should differ in content"
-        );
+        let any_diff = a
+            .iter()
+            .zip(b.iter())
+            .any(|(x, y)| x.update.price != y.update.price || x.update.token_pair_id != y.update.token_pair_id);
+        assert!(any_diff, "feeds for distinct seeds should differ in content");
     }
 
     #[test]
@@ -481,13 +448,11 @@ mod tests {
         let m2 = generate_market(&cfg, 1).unwrap();
         let a = generate_feed(&m1, &cfg, 99).unwrap();
         let b = generate_feed(&m2, &cfg, 99).unwrap();
-        let any_diff = a.iter().zip(b.iter()).any(|(x, y)| {
-            x.update.price != y.update.price || x.update.token_pair_id != y.update.token_pair_id
-        });
-        assert!(
-            any_diff,
-            "feeds for distinct markets should differ in content"
-        );
+        let any_diff = a
+            .iter()
+            .zip(b.iter())
+            .any(|(x, y)| x.update.price != y.update.price || x.update.token_pair_id != y.update.token_pair_id);
+        assert!(any_diff, "feeds for distinct markets should differ in content");
     }
 
     #[test]
@@ -514,11 +479,7 @@ mod tests {
         let feed = generate_feed(&market, &cfg, 7).unwrap();
         assert!(!feed.is_empty(), "single arb should still emit ticks");
 
-        let by_id: std::collections::HashMap<u64, (u64, u64)> = market
-            .pairs
-            .iter()
-            .map(|p| (p.id, (p.base, p.quote)))
-            .collect();
+        let by_id: std::collections::HashMap<u64, (u64, u64)> = market.pairs.iter().map(|p| (p.id, (p.base, p.quote))).collect();
 
         let mut common: Option<std::collections::HashSet<u64>> = None;
         for tick in &feed {
@@ -552,10 +513,7 @@ mod tests {
         let cfg = test_config(1);
         let market = generate_market(&cfg, 0).unwrap();
         let feed = generate_feed(&market, &cfg, 13).unwrap();
-        assert!(
-            feed.len() >= 2,
-            "single arb on a connected token should have ≥2 ticks"
-        );
+        assert!(feed.len() >= 2, "single arb on a connected token should have ≥2 ticks");
 
         // Reconstruct absolute timestamps.
         let mut abs: Vec<u64> = Vec::with_capacity(feed.len());
@@ -566,10 +524,7 @@ mod tests {
         }
 
         let t_main = abs[0];
-        assert!(
-            t_main < 1_000,
-            "main should fire within the first 1 ms window, got {t_main} µs"
-        );
+        assert!(t_main < 1_000, "main should fire within the first 1 ms window, got {t_main} µs");
         for &t_rebalance in &abs[1..] {
             let off = t_rebalance - t_main;
             assert!(
@@ -599,11 +554,7 @@ mod tests {
         // non-USD tokens across the feed underestimates "distinct mispriced
         // tokens" but bounds it from above. With 500 arbs and uniform
         // sampling over ~999 tokens, expect well over 100 distinct.
-        let by_id: std::collections::HashMap<u64, (u64, u64)> = market
-            .pairs
-            .iter()
-            .map(|p| (p.id, (p.base, p.quote)))
-            .collect();
+        let by_id: std::collections::HashMap<u64, (u64, u64)> = market.pairs.iter().map(|p| (p.id, (p.base, p.quote))).collect();
         let mut tokens = std::collections::HashSet::new();
         for tick in &feed {
             let (b, q) = by_id[&tick.update.token_pair_id];
@@ -629,30 +580,16 @@ mod tests {
         let market = generate_market(&cfg, 0).unwrap();
         let feed = generate_feed(&market, &cfg, 17).unwrap();
 
-        let mut by_pair: std::collections::HashMap<u64, Vec<u64>> =
-            std::collections::HashMap::new();
+        let mut by_pair: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
         for tick in &feed {
-            by_pair
-                .entry(tick.update.token_pair_id)
-                .or_default()
-                .push(tick.update.volume);
+            by_pair.entry(tick.update.token_pair_id).or_default().push(tick.update.volume);
         }
 
-        let busiest = by_pair
-            .values()
-            .max_by_key(|v| v.len())
-            .expect("at least one pair must be touched");
-        assert!(
-            busiest.len() >= 10,
-            "expected a pair with ≥10 ticks; got max {}",
-            busiest.len()
-        );
+        let busiest = by_pair.values().max_by_key(|v| v.len()).expect("at least one pair must be touched");
+        assert!(busiest.len() >= 10, "expected a pair with ≥10 ticks; got max {}", busiest.len());
         let min = busiest.iter().min().unwrap();
         let max = busiest.iter().max().unwrap();
-        assert!(
-            min != max,
-            "volumes for the busiest pair should vary; min == max == {min}"
-        );
+        assert!(min != max, "volumes for the busiest pair should vary; min == max == {min}");
     }
 
     #[test]
@@ -692,12 +629,7 @@ mod tests {
         for p in market.pairs.iter().take(usd_pair_count) {
             pu[p.base as usize] = p.price;
         }
-        let id_to_idx: std::collections::HashMap<u64, usize> = market
-            .pairs
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.id, i))
-            .collect();
+        let id_to_idx: std::collections::HashMap<u64, usize> = market.pairs.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
         for tick in &feed {
             let idx = id_to_idx[&tick.update.token_pair_id];
             let p = &market.pairs[idx];

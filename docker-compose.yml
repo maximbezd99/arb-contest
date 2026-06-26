@@ -14,6 +14,7 @@ services:
       SIM_UDP_TARGET: ${SIM_UDP_TARGET:?SIM_UDP_TARGET must be set}
       SIM_TCP_BIND: ${SIM_TCP_BIND:?SIM_TCP_BIND must be set}
       SIM_EXPECTED_CONTESTANTS: ${SIM_EXPECTED_CONTESTANTS:?SIM_EXPECTED_CONTESTANTS must be set}
+      SIM_INITIAL_BALANCE_USD: ${SIM_INITIAL_BALANCE_USD:?SIM_INITIAL_BALANCE_USD must be set}
       SEED: ${SEED:?SEED must be set}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9003/health"]
@@ -39,3 +40,4 @@ services:
       SIM_HTTP_ADDR: ${SIM_HTTP_ADDR:?SIM_HTTP_ADDR must be set}
       SIM_UDP_GROUP: ${SIM_UDP_GROUP:?SIM_UDP_GROUP must be set}
       SIM_SUBMISSION_ADDR: ${SIM_SUBMISSION_ADDR:?SIM_SUBMISSION_ADDR must be set}
+      SIM_INITIAL_BALANCE_USD: ${SIM_INITIAL_BALANCE_USD:?SIM_INITIAL_BALANCE_USD must be set}
