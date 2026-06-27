@@ -79,6 +79,8 @@ fn run(
         usd_pair_of_token
     };
 
+    let mut seq = 0;
+
     let mut overshoot_ns = 0u64;
     let mut late_ticks = 0u64;
     let mut dispatched = 0usize;
@@ -173,7 +175,9 @@ fn run(
         }
         overshoot_hist.record(overshoot_ns);
 
-        let update = feed[idx].update;
+        let mut update = feed[idx].update;
+        update.seq = seq;
+        seq += 1;
         let pair_idx = update.token_pair_id as usize;
         pairs[pair_idx].price = update.price;
         pairs[pair_idx].volume = update.volume;

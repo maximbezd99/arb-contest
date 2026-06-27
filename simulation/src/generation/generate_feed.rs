@@ -209,6 +209,7 @@ pub fn generate_feed(market: &Market, cfg: &GenerationConfig, seed: u64) -> Resu
         feed.push(FeedTick {
             delay_us: tick.t - prev_t,
             update: PriceUpdate {
+                seq: 0,
                 token_pair_id: market.pairs[tick.pair_idx].id,
                 price: tick.price,
                 volume: tick.volume,

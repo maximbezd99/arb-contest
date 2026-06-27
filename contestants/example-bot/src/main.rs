@@ -1,7 +1,10 @@
-use std::env;
-use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, TcpStream, ToSocketAddrs, UdpSocket};
-use std::process::ExitCode;
+use std::{
+    env,
+    io::{self, Read, Write},
+    net::{Ipv4Addr, TcpStream, ToSocketAddrs, UdpSocket},
+    os::fd::AsRawFd,
+    process::ExitCode,
+};
 
 use nix::sys::socket::{bind, setsockopt, socket, sockopt, AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn};
 
@@ -79,18 +82,19 @@ fn listen_feed(group: &str) -> io::Result<()> {
     let mut received: u64 = 0;
     loop {
         let (n, _from) = socket.recv_from(&mut buf)?;
-        received += 1;
-        if n < 24 {
+        if n < 32 {
             writeln!(out, "[example-bot] tick #{received}: short packet ({n} bytes)")?;
             continue;
         }
-        let pair_id = u64::from_le_bytes(buf[0..8].try_into().unwrap());
-        let price = u64::from_le_bytes(buf[8..16].try_into().unwrap());
-        let volume = u64::from_le_bytes(buf[16..24].try_into().unwrap());
+        let seq = u64::from_le_bytes(buf[0..8].try_into().unwrap());
+        let pair_id = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+        let price = u64::from_le_bytes(buf[16..24].try_into().unwrap());
+        let volume = u64::from_le_bytes(buf[24..32].try_into().unwrap());
         writeln!(
             out,
-            "[example-bot] tick #{received}: pair_id={pair_id} price={price} volume={volume}",
+            "[example-bot] tick #{received}: seq={seq} pair_id={pair_id} price={price} volume={volume}",
         )?;
+        received += 1;
     }
 }
 
@@ -126,12 +130,11 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// network namespace.
 fn bind_multicast_socket(port: u16) -> io::Result<UdpSocket> {
     let fd = socket(AddressFamily::Inet, SockType::Datagram, SockFlag::empty(), SockProtocol::Udp)?;
-    let udp = UdpSocket::from(fd);
-    setsockopt(&udp, sockopt::ReuseAddr, &true)?;
-    setsockopt(&udp, sockopt::ReusePort, &true)?;
+    setsockopt(&fd, sockopt::ReuseAddr, &true)?;
+    setsockopt(&fd, sockopt::ReusePort, &true)?;
     let addr = SockaddrIn::new(0, 0, 0, 0, port);
-    bind(std::os::fd::AsRawFd::as_raw_fd(&udp), &addr)?;
-    Ok(udp)
+    bind(fd.as_raw_fd(), &addr)?;
+    Ok(UdpSocket::from(fd))
 }
 
 struct Config {

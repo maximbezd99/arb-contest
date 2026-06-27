@@ -34,17 +34,20 @@ Those endpoints are served by HTTP server running in simulation. They are callab
 
 1. `GET /market` - parse the binary snapshot. `GET /market/json` if you want json instead.
 2. `POST /register` - read 8 bytes; that's your `contestant_id` (u64 LE).
-3. `TcpStream::connect(SIM_SUBMISSION_ADDR)` → **write 8 bytes** (your `contestant_id` as u64 LE) as first bytes. Only one tcp connection could be opened. If you open more then one - previous active is dropped.
+3. TCP connect `SIM_SUBMISSION_ADDR`. **Write 8 bytes** (your `contestant_id` as u64 LE) as first bytes. Only one tcp connection could be opened. If you open more then one - previous active is dropped.
 4.  Bind a UDP socket on `SIM_UDP_GROUP`'s port and join multicast group. You **must** set `SO_REUSEADDR` and `SO_REUSEPORT` on the socket **before** binding — every contestant container runs in the host network namespace, so without these the second bot's bind would fail. See `contestants/example-bot/src/main.rs` (`bind_multicast_socket`) for the pattern.
 5. `POST /{contestant_id}/ready` → simulation counts you toward `expected_contestants` and starts the runloop once all are ready.
 
-**UDP tick (24 bytes, LE):**
+**UDP tick (32 bytes, LE):**
 
 ```
-pair_id : u64
-price   : u64
-volume  : u64
+seq     : u64   # monotonic per-run counter; use to detect drops/reorders
+pair_id : u64   
+price   : u64   # in atomic-quote per 1 whole base
+volume  : u64   # in atomic-base
 ```
+
+**TCP handshake.** Immediately after `connect`, write your `contestant_id` as 8 bytes (u64 LE). No reply — submissions follow on the same stream.
 
 **TCP submission frame.** Each submission is a 9-byte header followed by `num_legs` × 25-byte legs (see `simulation/src/protocol/submission.rs`):
 
@@ -56,8 +59,8 @@ header (9 bytes, LE):
 leg (25 bytes, LE, repeated num_legs times):
   pair_id   : u64
   direction : u8    # 0 = Buy (pay quote, receive base), 1 = Sell (pay base, receive quote)
-  price     : u64   # atomic-quote per 1 whole base — must equal pair.price at evaluation time
-  volume    : u64   # atomic-base
+  price     : u64   # in atomic-quote per 1 whole base — must equal pair.price at evaluation time
+  volume    : u64   # in atomic-base
 ```
 
 Multiple submissions may be sent back-to-back on the same stream. Any framing error (`num_legs == 0`, `num_legs > 32`, `direction` not in {0, 1}) drops the stream.
